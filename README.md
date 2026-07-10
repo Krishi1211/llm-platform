@@ -1,4 +1,4 @@
-# Helix - LLM Observability Platform
+# Helix - LLM Observability Platforms
 
 > every LLM call → logged → observed
 
