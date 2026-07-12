@@ -10,8 +10,8 @@ Think a self-hosted LangSmith.
 
 ## Features
 - [x] Ollama + Postgres connection verified
-- [ ] LLM call logging middleware
-- [ ] Structured trace storage schema
+- [x] LLM call logging middleware
+- [x] Structured trace storage schema
 - [ ] Prompt versioning + diff view
 - [ ] Cost analytics dashboard
 - [ ] Alerting on cost/latency spikes
