@@ -12,7 +12,7 @@ Think a self-hosted LangSmith.
 - [x] Ollama + Postgres connection verified
 - [x] LLM call logging middleware
 - [x] Structured trace storage schema
-- [ ] Prompt versioning + diff view
+- [x] Prompt versioning + diff view
 - [ ] Cost analytics dashboard
 - [ ] Alerting on cost/latency spikes
 - [ ] OpenTelemetry trace export
