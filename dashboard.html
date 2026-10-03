@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Helix</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg: #f6f7f9; --panel: #fff; --border: #e2e5ea; --text: #1a1d21; --muted: #6b7380; --accent: #3b6fe0; --bad: #c9372c; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #14161a; --panel: #1c1f25; --border: #2c313a; --text: #e6e8eb; --muted: #8b93a1; --accent: #6f9bff; --bad: #ff7b72; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px 16px 40px; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, sans-serif; }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+  h1 { font-size: 20px; margin: 0; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 10px; }
+  select { font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 12px; }
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { color: var(--muted); font-size: 12px; }
+  .tile .value { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px; }
+  @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; }
+  td.prompt { white-space: normal; min-width: 220px; }
+  .bad { color: var(--bad); }
+  .empty { color: var(--muted); }
+  #alerts li { margin-bottom: 4px; }
+  #alerts { margin: 0; padding-left: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Helix</h1>
+    <select id="hours">
+      <option value="1">Last hour</option>
+      <option value="24" selected>Last 24 hours</option>
+      <option value="168">Last 7 days</option>
+      <option value="720">Last 30 days</option>
+    </select>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="grid">
+    <div class="panel"><h2>Cost over time (USD)</h2><canvas id="cost-chart" height="160"></canvas></div>
+    <div class="panel"><h2>Average latency (ms)</h2><canvas id="latency-chart" height="160"></canvas></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel scroll"><h2>By model</h2><table id="models"></table></div>
+    <div class="panel"><h2>Alerts</h2><ul id="alerts"></ul></div>
+  </div>
+
+  <div class="panel scroll"><h2>Recent traces</h2><table id="recent"></table></div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const usd = v => '$' + v.toFixed(v < 1 ? 4 : 2);
+const num = v => v.toLocaleString();
+const get = path => fetch(path).then(r => r.json());
+const charts = {};
+
+function el(tag, text, cls) {
+  const e = document.createElement(tag);
+  if (text !== undefined) e.textContent = text;
+  if (cls) e.className = cls;
+  return e;
+}
+
+function table(id, headers, rows) {
+  const t = $(id);
+  t.replaceChildren();
+  if (!rows.length) { t.appendChild(el('caption', 'No data in this period.', 'empty')); return; }
+  const head = t.insertRow();
+  headers.forEach(h => head.appendChild(el('th', h.label, h.cls)));
+  rows.forEach(r => {
+    const tr = t.insertRow();
+    headers.forEach(h => tr.appendChild(el('td', h.value(r), (h.cls || '') + (h.bad && h.bad(r) ? ' bad' : ''))));
+  });
+}
+
+function line(id, labels, data) {
+  const css = getComputedStyle(document.documentElement);
+  const grid = css.getPropertyValue('--border'), text = css.getPropertyValue('--muted');
+  if (charts[id]) charts[id].destroy();
+  charts[id] = new Chart($(id), {
+    type: 'line',
+    data: { labels, datasets: [{ data, borderColor: css.getPropertyValue('--accent'), borderWidth: 2, pointRadius: 2, tension: .25 }] },
+    options: {
+      plugins: { legend: { display: false } },
+      scales: { x: { grid: { color: grid }, ticks: { color: text, maxTicksLimit: 8 } }, y: { beginAtZero: true, grid: { color: grid }, ticks: { color: text } } }
+    }
+  });
+}
+
+async function load() {
+  const h = $('hours').value;
+  const [summary, models, series, recent, alerts] = await Promise.all([
+    get('/api/summary?hours=' + h), get('/api/models?hours=' + h), get('/api/timeseries?hours=' + h),
+    get('/api/recent'), get('/api/alerts')
+  ]);
+
+  $('tiles').replaceChildren(...[
+    ['Cost', usd(summary.cost_usd)],
+    ['Calls', num(summary.calls)],
+    ['Tokens', num(summary.prompt_tokens + summary.completion_tokens)],
+    ['p95 latency', num(Math.round(summary.p95_latency_ms)) + ' ms'],
+    ['Error rate', (summary.error_rate * 100).toFixed(1) + '%'],
+  ].map(([label, value]) => {
+    const tile = el('div', undefined, 'panel tile');
+    tile.append(el('div', label, 'label'), el('div', value, 'value'));
+    return tile;
+  }));
+
+  const fmt = iso => { const d = new Date(iso); return h > 72 ? d.toLocaleDateString() : d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+  line('cost-chart', series.map(p => fmt(p.bucket)), series.map(p => p.cost_usd));
+  line('latency-chart', series.map(p => fmt(p.bucket)), series.map(p => p.avg_latency_ms));
+
+  table('models', [
+    { label: 'Model', value: r => r.model },
+    { label: 'Calls', cls: 'num', value: r => num(r.calls) },
+    { label: 'Tokens', cls: 'num', value: r => num(r.prompt_tokens + r.completion_tokens) },
+    { label: 'Cost', cls: 'num', value: r => usd(r.cost_usd) },
+    { label: 'p95 ms', cls: 'num', value: r => num(Math.round(r.p95_latency_ms)) },
+    { label: 'Errors', cls: 'num', value: r => num(r.errors), bad: r => r.errors > 0 },
+  ], models);
+
+  table('recent', [
+    { label: 'Time', value: r => new Date(r.created_at).toLocaleString() },
+    { label: 'Model', value: r => r.model },
+    { label: 'Prompt', cls: 'prompt', value: r => r.prompt },
+    { label: 'Tokens', cls: 'num', value: r => num(r.total_tokens) },
+    { label: 'Cost', cls: 'num', value: r => usd(r.cost_usd) },
+    { label: 'ms', cls: 'num', value: r => num(Math.round(r.latency_ms)) },
+    { label: 'Status', value: r => r.status, bad: r => r.status !== 'success' },
+  ], recent);
+
+  $('alerts').replaceChildren(...(alerts.length
+    ? alerts.map(a => el('li', new Date(a.created_at).toLocaleString() + ': ' + a.message, 'bad'))
+    : [el('li', 'No alerts.', 'empty')]));
+}
+
+$('hours').addEventListener('change', load);
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>
