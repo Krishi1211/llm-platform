@@ -3,9 +3,9 @@ import uuid
 import requests
 import psycopg2
 import os
-import psycopg2
 import psycopg2.extras
 from dotenv import load_dotenv
+from otel_export import export_traces
 
 load_dotenv()
 
@@ -86,6 +86,13 @@ class Tracer:
         conn.commit()
         cur.close()
         conn.close()
+
+        export_traces([{
+            "trace_id": trace_id, "model": self.model, "latency_ms": latency_ms,
+            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
+            "status": status, "error_message": error_message, "tags": self.tags,
+            "end_time": time.time(),
+        }])
 
         return {
             "trace_id": trace_id,
